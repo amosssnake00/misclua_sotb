@@ -1,8 +1,14 @@
+-- Credits to @coldblooded, this started from Colds Big Bag though it looks nothing like it anymore.
+local actors = require('actors')
 --- @type Mq
 local mq = require("mq")
 
 --- @type ImGui
 require("ImGui")
+-- local debugger = require('debugger')
+-- local debug = debugger.new("amsactors")
+-- debug:Enable()
+
 
 local openGUI = true
 local shouldDrawGUI = true
@@ -19,7 +25,7 @@ local ICON_HEIGHT = 20
 local COUNT_X_OFFSET = 39
 local COUNT_Y_OFFSET = 23
 local EQ_ICON_OFFSET = 500
-local INVENTORY_DELAY_SECONDS = 0
+local INVENTORY_DELAY_SECONDS = 5
 
 -- EQ Texture Animation references
 local animItems = mq.FindTextureAnimation("A_DragItem")
@@ -28,6 +34,8 @@ local animBox = mq.FindTextureAnimation("A_RecessedBox")
 -- Bag Contents
 local items = {}
 local filteredItems = {}
+
+
 
 local showStats = false
 
@@ -45,12 +53,17 @@ local classFilter = 'Any Class'
 
 local doSort = true
 
-local invslots = {'charm','leftear','head','face','rightear','neck','shoulder','arms','back','leftwrist','rightwrist','ranged','hands','mainhand','offhand','leftfinger','rightfinger','chest','legs','feet','waist','powersource','ammo'}
-local invslotfilters = {'Any Slot','charm','ears','head','face','neck','shoulder','arms','back','wrists','ranged','hands','mainhand','offhand','fingers','chest','legs','feet','waist','powersource','ammo'}
-local itemtypefilters = {'Any Type','Armor','weapon','Augmentation','container','Food','Drink','Combinable'}
-local locationfilters = {'Any Location','on person','bank'}
-local classfilters = {'Any Class','Bard','Beastlord','Berserker','Cleric','Druid','Enchanter','Magician','Monk','Necromancer','Paladin','Ranger','Rogue','Shadow Knight','Shaman','Warrior','Wizard'}
+local invslots = { 'charm', 'leftear', 'head', 'face', 'rightear', 'neck', 'shoulder', 'arms', 'back', 'leftwrist',
+    'rightwrist', 'ranged', 'hands', 'mainhand', 'offhand', 'leftfinger', 'rightfinger', 'chest', 'legs', 'feet', 'waist',
+    'powersource', 'ammo' }
+local invslotfilters = { 'Any Slot', 'charm', 'ears', 'head', 'face', 'neck', 'shoulder', 'arms', 'back', 'wrists',
+    'ranged', 'hands', 'mainhand', 'offhand', 'fingers', 'chest', 'legs', 'feet', 'waist', 'powersource', 'ammo' }
+local itemtypefilters = { 'Any Type', 'Armor', 'weapon', 'Augmentation', 'container', 'Food', 'Drink', 'Combinable' }
+local locationfilters = { 'Any Location', 'on person', 'bank' }
+local classfilters = { 'Any Class', 'Bard', 'Beastlord', 'Berserker', 'Cleric', 'Druid', 'Enchanter', 'Magician', 'Monk',
+    'Necromancer', 'Paladin', 'Ranger', 'Rogue', 'Shadow Knight', 'Shaman', 'Warrior', 'Wizard' }
 
+local searchExactMatch = true
 local searchText = ''
 local searchResults = {}
 local resultItems = {}
@@ -60,79 +73,160 @@ local searchUpdateResults = true
 
 local usingDanNet = true
 
-local function insertItem(item, opts)
-    local entry = {item=item, itemslot=item.ItemSlot(), itemslot2=item.ItemSlot2()}
-    if opts then for k,v in pairs(opts) do entry[k] = v end end
+local selectedItems = {}
+
+
+
+
+-- Actor stuff
+local actor = {}
+local toons = {}
+local remoteitems = {}
+local senditems = {}
+
+
+--- END definitions
+
+local function flattenClasses(item, array)
+    local results = {}
+    results['NONE'] = true
+    for _, value in ipairs(array) do
+        if item.Class(value)() ~= nil then
+            results[value] = true
+        end
+    end
+    return results
+end
+
+local function flattenWornSlots(item, array)
+    local results = {}
+    results['NONE'] = true
+    for _, value in ipairs(array) do
+        if item.WornSlot(value)() then
+            results[value] = true
+        end
+    end
+    return results
+end
+
+local function shallowCopy(orig)
+    local copy = {}
+    for key, value in pairs(orig) do
+        copy[key] = value
+    end
+    return copy
+end
+
+local function insertItem(item, itemSlot, itemSlot2, opts)
+    local localtoon = mq.TLO.Me.Name()
+    local localClasses = flattenClasses(item, classfilters)
+    local localWornSlots = flattenWornSlots(item, invslots)
+    --local entry = {item=item, itemslot=item.ItemSlot(), itemslot2=item.ItemSlot2()}
+    local entry = {
+        id = #items + 1,
+        toonname = localtoon,
+        -- need to specify for actors
+        -- item = item,
+        item = {
+            AC = item.AC(),
+            Avoidance = item.Avoidance(),
+            HP = item.HP(),
+            Icon = item.Icon(),
+            Mana = item.Mana(),
+            Name = item.Name(),
+            Shielding = item.Shielding(),
+            Stack = item.Stack(),
+            Tribute = item.Tribute(),
+            Value = item.Value(),
+            Damage = item.Damage(),
+            WornSlot = localWornSlots,
+            Type = item.Type(),
+            Container = item.Container(),
+            Class = localClasses,
+            Classes = item.Classes()
+        },
+        itemslot = itemSlot,
+        itemslot2 = itemSlot2 > 0 and
+            itemSlot2 - 1 or -1
+    }
+    if opts then for k, v in pairs(opts) do entry[k] = v end end
     table.insert(items, entry)
 end
 
-local function insertContainerItems(slot, opts)
+local function insertContainerItems(slot, itemSlot, opts)
     for j = 1, slot.Container() do
         local containerSlot = slot.Item(j)
         if containerSlot() then
-            insertItem(containerSlot, opts)
+            insertItem(containerSlot, itemSlot, j, opts)
         end
     end
     --print(slot.ItemSlot())
-    insertItem(slot, opts)
+    insertItem(slot, itemSlot, -1, opts)
 end
 
 local function isContainer(slot)
     return slot.Container() and slot.Container() > 0
 end
 
+
+-- TODO AMS: change TLO reference, copy structure (at least for transferred stuff)
+-- keep items and remoteitems (->otheritems) separated, append here?
+
 -- The beast - this routine is what builds our inventory.
 local function createInventory()
     if (os.difftime(os.time(), startTime)) > INVENTORY_DELAY_SECONDS or #items == 0 or forceRefresh then
         startTime = os.time()
         forceRefresh = false
+
         filterChanged = true
         searchChanged = true
         items = {}
         for i = 23, 34 do
             local slot = mq.TLO.Me.Inventory(i)
             if isContainer(slot) then
-                insertContainerItems(slot)
+                insertContainerItems(slot, i)
             elseif slot.ID() ~= nil then
-                insertItem(slot) -- We have an item in a bag slot
+                insertItem(slot, i, -1) -- We have an item in a bag slot
             end
         end
         for i = 1, 24 do
             local slot = mq.TLO.Me.Bank(i)
             if isContainer(slot) then
-                insertContainerItems(slot, {bank=true})
+                insertContainerItems(slot, i, { bank = true })
             elseif slot.ID() ~= nil then
-                insertItem(slot, {bank=true}) -- We have an item in a bank slot
+                insertItem(slot, i, -1, { bank = true }) -- We have an item in a bank slot
             end
         end
         for i = 1, 2 do
             local slot = mq.TLO.Me.SharedBank(i)
             if isContainer(slot) then
-                insertContainerItems(slot, {sharedbank=true})
+                insertContainerItems(slot, i, { sharedbank = true })
             elseif slot.ID() ~= nil then
-                insertItem(slot, {sharedbank=true}) -- We have an item in a sharedbank slot
+                insertItem(slot, i, -1, { sharedbank = true }) -- We have an item in a sharedbank slot
             end
         end
         for i = 0, 22 do
             local slot = mq.TLO.InvSlot(i).Item
             if slot.ID() ~= nil then
-                insertItem(slot, {invslot=i})
-                for j=1,8 do
+                insertItem(slot, i, -1, { invslot = i })
+                for j = 1, 8 do
                     local augSlot = slot.AugSlot(j).Item
                     if augSlot() then
-                        insertItem(augSlot, {invslot=i, augslot=j})
+                        insertItem(augSlot, i, -1, { invslot = i, augslot = j })
                     end
                 end
             end
         end
+        senditems = shallowCopy(items)
+        table.move(remoteitems, 1, #remoteitems, #items + 1, items)
     end
 end
 
 -- Converts between ItemSlot and /itemnotify pack or bank numbers
 local function toPackOrBank(itemSlot, inBank, inSharedBank)
-    if inBank then return 'bank'..tostring(itemSlot + 1) end
-    if inSharedBank then return 'sharedbank'..tostring(itemSlot + 1) end
-    return 'pack'..tostring(itemSlot - 22)
+    if inBank then return 'bank' .. tostring(itemSlot + 1) end
+    if inSharedBank then return 'sharedbank' .. tostring(itemSlot + 1) end
+    return 'pack' .. tostring(itemSlot - 22)
 end
 
 -- Converts between ItemSlot2 and /itemnotify numbers
@@ -142,20 +236,23 @@ end
 
 -- Displays static utilities that always show at the top of the UI
 local function displayBagUtilities()
-    if ImGui.SmallButton("Reset") then filterText = "" filterChanged = true end
+    if ImGui.SmallButton("Reset") then
+        filterText = ""
+        filterChanged = true
+    end
     ImGui.SameLine()
     if ImGui.SmallButton("AutoInventory") then mq.cmd('/autoinv') end
     local y = ImGui.GetCursorPosY()
-    ImGui.SetCursorPosY(y+5)
+    ImGui.SetCursorPosY(y + 5)
     ImGui.Separator()
     y = ImGui.GetCursorPosY()
-    ImGui.SetCursorPosY(y+5)
+    ImGui.SetCursorPosY(y + 5)
     showStats = ImGui.Checkbox('Show Stat Columns', showStats)
     y = ImGui.GetCursorPosY()
-    ImGui.SetCursorPosY(y+5)
+    ImGui.SetCursorPosY(y + 5)
     ImGui.Separator()
     y = ImGui.GetCursorPosY()
-    ImGui.SetCursorPosY(y+5)
+    ImGui.SetCursorPosY(y + 5)
     ImGui.Text('Search')
     ImGui.PushItemWidth(185)
     local text, selected = ImGui.InputText("##Filter", filterText)
@@ -172,8 +269,8 @@ end
 
 local function drawFilterMenu(label, filter, filterOptions)
     ImGui.Text(label)
-    if ImGui.BeginCombo('##'..label, filter) then
-        for _,option in ipairs(filterOptions) do
+    if ImGui.BeginCombo('##' .. label, filter) then
+        for _, option in ipairs(filterOptions) do
             if ImGui.Selectable(option, option == filter) then
                 if filter ~= option then
                     ImGui.EndCombo()
@@ -185,6 +282,8 @@ local function drawFilterMenu(label, filter, filterOptions)
     end
     return filter, false
 end
+
+local action = nil
 
 local function displayMenus()
     ImGui.PushItemWidth(185)
@@ -199,12 +298,33 @@ local function displayMenus()
     filterChanged = filterChanged or tempFilterChanged
     ImGui.PopItemWidth()
     local y = ImGui.GetCursorPosY()
-    ImGui.SetCursorPosY(y+15)
+    ImGui.SetCursorPosY(y + 10)
     ImGui.Separator()
     y = ImGui.GetCursorPosY()
-    ImGui.SetCursorPosY(y+15)
+    ImGui.SetCursorPosY(y + 10)
     if usingDanNet then
         if ImGui.Button("Search Across Toons") then openSearchGUI = true end
+    end
+    if ImGui.Button('Bank Selected Items') then
+        action = 'bank'
+    end
+    if ImGui.Button('Withdraw Selected Items') then
+        action = 'withdraw'
+    end
+    if ImGui.Button('Sell Selected Items') then
+        action = 'sell'
+    end
+    if ImGui.Button('Tribute Selected Items') then
+        action = 'tribute'
+    end
+    if ImGui.Button('Actor Update All Inv') then
+        action = 'actorupdate'
+    end
+    if ImGui.Button('Refresh Actor List') then
+        action = 'checkactors'
+    end
+    if ImGui.Button('Clear Actor ItemList') then
+        action = 'clearactors'
     end
 end
 
@@ -224,21 +344,23 @@ local function buttonLabel(itemSlot, itemSlot2, inBank, inSharedBank, invslot, a
 end
 
 local function getItemLocation(itemSlot, itemSlot2, inBank, inSharedBank, invslot, augslot)
-    if augslot then return invslots[invslot+1] .. ' aug ' .. augslot end
-    if invslot then return invslots[invslot+1] end
+    if augslot then return invslots[invslot + 1] .. ' aug ' .. augslot end
+    if invslot then return invslots[invslot + 1] end
     if itemSlot2 == -1 then
         local prefix = ''
-        if inBank then return string.format('bank%s', itemSlot+1) end
-        if inSharedBank then return string.format('sharedbank%s', itemSlot+1) end
-        return string.format('pack%s', itemSlot-22)
+        if inBank then return string.format('bank%s', itemSlot + 1) end
+        if inSharedBank then return string.format('sharedbank%s', itemSlot + 1) end
+        return string.format('pack%s', itemSlot - 22)
     else
-        return "in "..toPackOrBank(itemSlot, inBank, inSharedBank).." "..toBagSlot(itemSlot2)
+        return "in " .. toPackOrBank(itemSlot, inBank, inSharedBank) .. " " .. toBagSlot(itemSlot2)
     end
 end
 
 local function onLeftClick(item, itemLocation)
     if not item.augslot and (not (item.bank or item.sharedbank) or mq.TLO.Window('BigBankWnd').Open()) then
-        if not mq.TLO.Cursor() and not mq.TLO.Me.Casting() then
+        if not mq.TLO.Cursor() and not mq.TLO.Me.Casting() and item.toonname == mq.TLO.Me.CleanName() then
+            --    printf('localtoon: %s me %s ',item.toonname, mq.TLO.Me.CleanName())
+            --         if not mq.TLO.Cursor() and not mq.TLO.Me.Casting() and item.localtoon == mq.TLO.Me.CleanName() then
             mq.cmdf("/nomodkey /shiftkey /itemnotify %s leftmouseup", itemLocation)
             forceRefresh = true
         end
@@ -249,56 +371,73 @@ local function handleClicks(item, itemLocation)
     if ImGui.IsItemHovered() and ImGui.IsMouseReleased(ImGuiMouseButton.Left) then
         onLeftClick(item, itemLocation)
     end
-    if ImGui.IsItemHovered() and ImGui.IsMouseReleased(ImGuiMouseButton.Right) then
-        item.item.Inspect()
-    end
+    -- does not work with actor change
+    -- if ImGui.IsItemHovered() and ImGui.IsMouseReleased(ImGuiMouseButton.Right) then
+    --   item.item.Inspect()
+    -- end
 end
 
 local function drawItemRow(item)
-    local itemName = item.item.Name()
-    local itemIcon = item.item.Icon()
+    local itemName = item.item.Name
+    local itemIcon = item.item.Icon
     local itemSlot = item.itemslot
     local itemSlot2 = item.itemslot2
-    local stack = item.item.Stack()
+    local stack = item.item.Stack
+    local Toonname = item.toonname
     if not (itemName and itemIcon and itemSlot and itemSlot2 and stack) then return end
     local label = buttonLabel(itemSlot, itemSlot2, item.bank, item.sharedbank, item.invslot, item.augslot)
     local itemLocation = getItemLocation(itemSlot, itemSlot2, item.bank, item.sharedbank, item.invslot, item.augslot)
+    local cursor_x, cursor_y = ImGui.GetCursorPos()
+    ImGui.Selectable(label, false, bit32.bor(ImGuiSelectableFlags.SpanAllColumns, ImGuiSelectableFlags.AllowItemOverlap))
+    handleClicks(item, itemLocation)
+
+    ImGui.SetCursorPos(cursor_x, cursor_y)
+    if ImGui.Checkbox(label .. 'checkbox', selectedItems[label] ~= nil) then
+        selectedItems[label] = { item = item.item, location = itemLocation }
+    else
+        selectedItems[label] = nil
+    end
+    ImGui.TableNextColumn()
 
     -- Reset the cursor to start position, then fetch and draw the item icon
-    local cursor_x, cursor_y = ImGui.GetCursorPos()
     animItems:SetTextureCell(itemIcon - EQ_ICON_OFFSET)
     ImGui.DrawTextureAnimation(animItems, ICON_WIDTH, ICON_HEIGHT)
 
     -- Reset the cursor to start position, then draw a transparent button (for drag & drop)
-    ImGui.SetCursorPos(cursor_x, cursor_y)
+    --ImGui.SetCursorPos(cursor_x, cursor_y)
     ImGui.PushStyleColor(ImGuiCol.Button, 0, 0, 0, 0)
     ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0, 0.3, 0, 0.2)
     ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0, 0.3, 0, 0.3)
-    ImGui.Selectable(label, false, bit32.bor(ImGuiSelectableFlags.SpanAllColumns, ImGuiSelectableFlags.AllowItemOverlap))
     ImGui.PopStyleColor(3)
-    handleClicks(item, itemLocation)
 
     ImGui.TableNextColumn()
-
-    ImGui.Text(itemName)
+    ImGui.Text("%s", itemName)
 
     ImGui.TableNextColumn()
 
     -- Overlay the stack size text in the lower right corner
     if stack > 1 then
-        ImGui.Text(tostring(stack))
+        ImGui.Text("%s", stack)
     else
         ImGui.Text('1')
     end
 
     ImGui.TableNextColumn()
+    ImGui.Text("%s", itemLocation)
 
-    ImGui.Text(itemLocation)
+    ImGui.TableNextColumn()
+    ImGui.Text("%s", item.item.Value / 1000)
+
+    ImGui.TableNextColumn()
+    ImGui.Text("%s", item.item.Tribute)
+
+    ImGui.TableNextColumn()
+    ImGui.Text("%s", Toonname)
 
     if usingDanNet then
         ImGui.TableNextColumn()
 
-        if ImGui.Button('Search##'..label) then
+        if ImGui.Button('Search##' .. label) then
             searchText = itemName
             searchChanged = true
             openSearchGUI = true
@@ -307,33 +446,60 @@ local function drawItemRow(item)
 
     if showStats then
         ImGui.TableNextColumn()
-        ImGui.Text('%s', item.item.AC())
+        ImGui.Text('%s', item.item.AC)
         ImGui.TableNextColumn()
-        ImGui.Text('%s', item.item.HP())
+        ImGui.Text('%s', item.item.HP)
         ImGui.TableNextColumn()
-        ImGui.Text('%s', item.item.Mana())
+        ImGui.Text('%s', item.item.Mana)
         ImGui.TableNextColumn()
-        ImGui.Text('%s', item.item.Shielding())
+        ImGui.Text('%s', item.item.Shielding)
         ImGui.TableNextColumn()
-        ImGui.Text('%s', item.item.Avoidance())
+        ImGui.Text('%s', item.item.Avoidance)
     end
 end
 
+-- If there is an item on the cursor, display it.
+local function displayItemOnCursor()
+    if mq.TLO.Cursor() then
+        local cursor_item = mq.TLO.Cursor -- this will be an MQ item, so don't forget to use () on the members!
+        local mouse_x, mouse_y = ImGui.GetMousePos()
+        local window_x, window_y = ImGui.GetWindowPos()
+        local icon_x = mouse_x - window_x + 10
+        local icon_y = mouse_y - window_y + 10
+        local stack_x = icon_x + COUNT_X_OFFSET
+        local stack_y = icon_y + COUNT_Y_OFFSET
+        local text_size = ImGui.CalcTextSize(tostring(cursor_item.Stack()))
+        ImGui.SetCursorPos(icon_x, icon_y)
+        animItems:SetTextureCell(cursor_item.Icon() - EQ_ICON_OFFSET)
+        ImGui.DrawTextureAnimation(animItems, ICON_WIDTH, ICON_HEIGHT)
+        if cursor_item.Stackable() then
+            ImGui.SetCursorPos(stack_x, stack_y)
+            ImGui.DrawTextureAnimation(animBox, text_size, ImGui.GetTextLineHeight())
+            ImGui.SetCursorPos(stack_x - text_size, stack_y)
+            ImGui.TextUnformatted(tostring(cursor_item.Stack()))
+        end
+    end
+end
+
+local ColumnID_Select = 0
 local ColumnID_Icon = 1
 local ColumnID_Name = 2
 local ColumnID_Quantity = 3
 local ColumnID_Slot = 4
 local ColumnID_Search = 5
-local ColumnID_AC = 6
-local ColumnID_HP = 7
-local ColumnID_Mana = 8
-local ColumnID_Shielding = 9
-local ColumnID_Avoidance = 10
+local ColumnID_Toonname = 6
+local ColumnID_Value = 7
+local ColumnID_Tribute = 8
+local ColumnID_AC = 9
+local ColumnID_HP = 10
+local ColumnID_Mana = 11
+local ColumnID_Shielding = 12
+local ColumnID_Avoidance = 13
 
 local current_sort_specs = nil
 local function CompareWithSortSpecs(a, b)
-    local aName = a and a.item.Name() or ''
-    local bName = b and b.item.Name() or ''
+    local aName = a and a.item.Name or ''
+    local bName = b and b.item.Name or ''
     for n = 1, current_sort_specs.SpecsCount, 1 do
         -- Here we identify columns using the ColumnUserID value that we ourselves passed to TableSetupColumn()
         -- We could also choose to identify columns based on their index (sort_spec.ColumnIndex), which is simpler!
@@ -368,16 +534,20 @@ local function CompareWithSortSpecs(a, b)
                     delta = 0
                 end
             end
+        elseif sort_spec.ColumnUserID == ColumnID_Value then
+            delta = (a and a.item.Value or 0) - (b and b.item.Value or 0)
+        elseif sort_spec.ColumnUserID == ColumnID_Tribute then
+            delta = (a and a.item.Tribute or 0) - (b and b.item.Tribute or 0)
         elseif sort_spec.ColumnUserID == ColumnID_AC then
-            delta = (a and a.item.AC() or 0) - (b and b.item.AC() or 0)
+            delta = (a and a.item.AC or 0) - (b and b.item.AC or 0)
         elseif sort_spec.ColumnUserID == ColumnID_HP then
-            delta = (a and a.item.HP() or 0) - (b and b.item.HP() or 0)
+            delta = (a and a.item.HP or 0) - (b and b.item.HP or 0)
         elseif sort_spec.ColumnUserID == ColumnID_Mana then
-            delta = (a and a.item.Mana() or 0) - (b and b.item.Mana() or 0)
+            delta = (a and a.item.Mana or 0) - (b and b.item.Mana or 0)
         elseif sort_spec.ColumnUserID == ColumnID_Shielding then
-            delta = (a and a.item.Shielding() or 0) - (b and b.item.Shielding() or 0)
+            delta = (a and a.item.Shielding or 0) - (b and b.item.Shielding or 0)
         elseif sort_spec.ColumnUserID == ColumnID_Avoidance then
-            delta = (a and a.item.Avoidance() or 0) - (b and b.item.Avoidance() or 0)
+            delta = (a and a.item.Avoidance or 0) - (b and b.item.Avoidance or 0)
         end
 
         if delta ~= 0 then
@@ -394,28 +564,29 @@ local function CompareWithSortSpecs(a, b)
 end
 
 local function applyTextFilter(item)
-    return string.match(string.lower(item.item.Name()), string.lower(filterText))
+    return string.match(string.lower(item.item.Name), string.lower(filterText))
 end
 
-local leftrightslots = {ears='leftear',wrists='leftwrist',fingers='leftfinger'}
+local leftrightslots = { ears = 'leftear', wrists = 'leftwrist', fingers = 'leftfinger' }
 local function applySlotFilter(item)
     local tempSlotFilter = leftrightslots[slotFilter] or slotFilter
-    return item.item.WornSlot(tempSlotFilter)()
+    printf('filter: %s', tempSlotFilter)
+    return item.item.WornSlot[tempSlotFilter]
 end
 
 local function applyTypeFilter(item)
-    return (typeFilter == 'weapon' and (item.item.Damage() > 0 or item.item.Type() == 'Shield')) or
-            (typeFilter == 'container' and item.item.Container() > 0) or
-            item.item.Type() == typeFilter
+    return (typeFilter == 'weapon' and (item.item.Damage > 0 or item.item.Type == 'Shield')) or
+        (typeFilter == 'container' and item.item.Container > 0) or
+        item.item.Type == typeFilter
 end
 
 local function applyLocationFilter(item)
     return (locationFilter == 'on person' and not (item.bank or item.sharedbank)) or
-            (locationFilter == 'bank' and (item.bank or item.sharedbank))
+        (locationFilter == 'bank' and (item.bank or item.sharedbank))
 end
 
 local function applyClassFilter(item)
-    if item.item.Classes() == 16 or item.item.Class(classFilter)() then return true end
+    if item.item.Classes == 16 or item.item.Class[classFilter] then return true end
 end
 
 local function filterItems()
@@ -432,12 +603,12 @@ local function filterItems()
 
         if #filterFuncs > 0 then
             filterFunction = function(item)
-                for _,func in ipairs(filterFuncs) do
+                for _, func in ipairs(filterFuncs) do
                     if not func(item) then return false end
                 end
                 return true
             end
-            for i,item in ipairs(items) do
+            for i, item in ipairs(items) do
                 if filterFunction(item) then
                     table.insert(filteredItems, item)
                 end
@@ -451,19 +622,24 @@ local function filterItems()
     end
 end
 
-local TABLE_FLAGS = bit32.bor(ImGuiTableFlags.ScrollY,ImGuiTableFlags.RowBg,ImGuiTableFlags.BordersOuter,ImGuiTableFlags.BordersV,ImGuiTableFlags.SizingStretchSame,ImGuiTableFlags.Sortable,
-                                ImGuiTableFlags.Hideable, ImGuiTableFlags.Resizable, ImGuiTableFlags.Reorderable)
+local TABLE_FLAGS = bit32.bor(ImGuiTableFlags.ScrollY, ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter,
+    ImGuiTableFlags.BordersV, ImGuiTableFlags.SizingStretchSame, ImGuiTableFlags.Sortable,
+    ImGuiTableFlags.Hideable, ImGuiTableFlags.Resizable, ImGuiTableFlags.Reorderable)
 ---Handles the bag layout of individual items
 local function displayBagContent()
     createInventory()
-    local numColumns = usingDanNet and 5 or 4
+    local numColumns = usingDanNet and 9 or 8
     if showStats then numColumns = numColumns + 5 end
     if ImGui.BeginTable('bagtable', numColumns, TABLE_FLAGS) then
         ImGui.TableSetupScrollFreeze(0, 1)
+        ImGui.TableSetupColumn('##select', ImGuiTableColumnFlags.None, 1, ColumnID_Select)
         ImGui.TableSetupColumn('##icon', ImGuiTableColumnFlags.NoSort, 1, ColumnID_Icon)
         ImGui.TableSetupColumn('Name', ImGuiTableColumnFlags.DefaultSort, 5, ColumnID_Name)
         ImGui.TableSetupColumn('Quantity', ImGuiTableColumnFlags.DefaultSort, 2, ColumnID_Quantity)
         ImGui.TableSetupColumn('Slot', ImGuiTableColumnFlags.DefaultSort, 2, ColumnID_Slot)
+        ImGui.TableSetupColumn('Value', ImGuiTableColumnFlags.DefaultSort, 2, ColumnID_Value)
+        ImGui.TableSetupColumn('Tribute', ImGuiTableColumnFlags.DefaultSort, 2, ColumnID_Tribute)
+        ImGui.TableSetupColumn('Toonname', ImGuiTableColumnFlags.DefaultSort, 2, ColumnID_Toonname)
         if usingDanNet then
             ImGui.TableSetupColumn('Search', ImGuiTableColumnFlags.NoSort, 2, ColumnID_Search)
         end
@@ -493,7 +669,7 @@ local function displayBagContent()
         local clipper = ImGuiListClipper.new()
         clipper:Begin(#filteredItems)
         while clipper:Step() do
-            for row = clipper.DisplayStart+1, clipper.DisplayEnd, 1 do
+            for row = clipper.DisplayStart + 1, clipper.DisplayEnd, 1 do
                 local item = filteredItems[row]
                 if item then
                     ImGui.TableNextRow()
@@ -513,24 +689,24 @@ local function drawSearchItemRow(item)
     local itemCount = item.count
     local itemInBags = item.inbags
 
-    if itemInBags and ImGui.Button('Request##'..itemName..itemToon) then
-        itemRequest = {toon=itemToon, name=itemName}
+    if itemInBags and ImGui.Button('Request##' .. itemName .. itemToon) then
+        itemRequest = { toon = itemToon, name = itemName }
     end
     ImGui.TableNextColumn()
 
-    ImGui.Text(itemName)
+    ImGui.Text("%s", itemName)
 
     ImGui.TableNextColumn()
 
-    ImGui.Text(itemToon)
+    ImGui.Text("%s", itemToon)
 
     ImGui.TableNextColumn()
 
-    ImGui.Text(tostring(itemCount))
+    ImGui.Text("%s", itemCount)
 
     ImGui.TableNextColumn()
 
-    ImGui.Text(tostring(itemInBags))
+    ImGui.Text("%s", itemInBags)
 
     ImGui.TableNextColumn()
 end
@@ -545,17 +721,23 @@ local function displaySearchOptions()
         searchChanged = true
     end
     ImGui.SameLine()
-    if ImGui.SmallButton("Clear") then 
+    if ImGui.SmallButton("Clear") then
         searchText = ""
         searchChanged = true
         searchResults = {}
-        searchUpdateResults = true    
+        searchUpdateResults = true
     end
     ImGui.SameLine()
     local newShouldSearchBank = ImGui.Checkbox('Search Bank', shouldSearchBank)
     if newShouldSearchBank ~= shouldSearchBank then
         searchChanged = true
         shouldSearchBank = newShouldSearchBank
+    end
+    ImGui.SameLine()
+    local newExactSearch = ImGui.Checkbox('Exact Match', searchExactMatch)
+    if newExactSearch ~= searchExactMatch then
+        searchChanged = true
+        searchExactMatch = newExactSearch
     end
 end
 
@@ -577,7 +759,7 @@ local function displaySearchContent()
         local clipper = ImGuiListClipper.new()
         clipper:Begin(#resultItems)
         while clipper:Step() do
-            for row = clipper.DisplayStart+1, clipper.DisplayEnd, 1 do
+            for row = clipper.DisplayStart + 1, clipper.DisplayEnd, 1 do
                 local item = resultItems[row]
                 if item then
                     ImGui.TableNextRow()
@@ -591,7 +773,7 @@ local function displaySearchContent()
 end
 
 local function DrawSplitter(thickness, size0, min_size0)
-    local x,y = ImGui.GetCursorPos()
+    local x, y = ImGui.GetCursorPos()
     local delta = 0
     ImGui.SetCursorPosX(x + size0)
 
@@ -608,8 +790,8 @@ local function DrawSplitter(thickness, size0, min_size0)
 end
 
 local function LeftPaneWindow()
-    local x,y = ImGui.GetContentRegionAvail()
-    if ImGui.BeginChild("left", leftPanelWidth, y-1, true) then
+    local x, y = ImGui.GetContentRegionAvail()
+    if ImGui.BeginChild("left", leftPanelWidth, y - 1, true) then
         displayBagUtilities()
         displayMenus()
     end
@@ -617,8 +799,8 @@ local function LeftPaneWindow()
 end
 
 local function RightPaneWindow()
-    local x,y = ImGui.GetContentRegionAvail()
-    if ImGui.BeginChild("right", x, y-1, true) then
+    local x, y = ImGui.GetContentRegionAvail()
+    if ImGui.BeginChild("right", x, y - 1, true) then
         displayBagContent()
     end
     ImGui.EndChild()
@@ -639,10 +821,12 @@ local function FindGUI()
         openGUI, shouldDrawGUI = ImGui.Begin(string.format("Find Item Window"), openGUI, ImGuiWindowFlags.NoScrollbar)
         if shouldDrawGUI then
             displayWindowPanels()
+            displayItemOnCursor()
         end
         ImGui.End()
         if not openSearchGUI then return end
-        openSearchGUI, shouldDrawSearchGUI = ImGui.Begin(string.format("Search Window"), openGUI, ImGuiWindowFlags.NoScrollbar)
+        openSearchGUI, shouldDrawSearchGUI = ImGui.Begin(string.format("Search Window"), openGUI,
+            ImGuiWindowFlags.NoScrollbar)
         if shouldDrawSearchGUI then
             displaySearchOptions()
             displaySearchContent()
@@ -666,12 +850,192 @@ local function applyStyle()
     ImGui.PopStyleColor(8)
 end
 
+local function bank()
+    if not mq.TLO.Window('BigBankWnd').Open() then return end
+    for k, v in pairs(selectedItems) do
+        if v.location:find('pack') then
+            printf('Going to %s item %s (%s)', action, v.item.Name(), v.location)
+            mq.cmdf('/nomodkey /shiftkey /itemnotify %s leftmouseup', v.location)
+            mq.delay(500, function() return mq.TLO.Cursor() == v.item.Name() end)
+            mq.cmd('/notify BigBankWnd BIGB_AutoButton leftmouseup')
+            mq.delay(500, function() return not mq.TLO.Cursor() end)
+        end
+    end
+end
+
+local function withdraw()
+    if not mq.TLO.Window('BigBankWnd').Open() then return end
+    for k, v in pairs(selectedItems) do
+        if v.location:find('bank') then
+            printf('Going to %s item %s (%s)', action, v.item.Name(), v.location)
+            mq.cmdf('/nomodkey /shiftkey /itemnotify %s leftmouseup', v.location)
+            mq.delay(500) --, function() return mq.TLO.Cursor() == v.item.Name() end)
+            if mq.TLO.Cursor() then
+                mq.cmd('/autoinv')
+            end
+            mq.delay(500, function() return not mq.TLO.Cursor() end)
+        end
+    end
+end
+
+local function sell()
+    if not mq.TLO.Window('MerchantWnd').Open() then return end
+    local totalPlat = mq.TLO.Me.Platinum()
+    local soldItems = 0
+    for k, v in pairs(selectedItems) do
+        if v.item.Value() > 0 and v.location:find('pack') then
+            printf('Going to %s item %s (%s)', action, v.item.Name(), v.location)
+            mq.cmdf('/nomodkey /itemnotify "%s" leftmouseup', v.item.Name())
+            mq.delay(1000,
+                function() return mq.TLO.Window('MerchantWnd/MW_SelectedItemLabel').Text() == v.item.Name() end)
+            mq.cmd('/nomodkey /shiftkey /notify merchantwnd MW_Sell_Button leftmouseup')
+            mq.delay(1000, function() return mq.TLO.Window('MerchantWnd/MW_SelectedItemLabel').Text() == '' end)
+            soldItems = soldItems + 1
+        end
+    end
+    local newTotalPlat = mq.TLO.Me.Platinum() - totalPlat
+    printf('\awSold \ay%s\ax items for \ag%s\ax plat.', soldItems, newTotalPlat)
+end
+
+local function tribute()
+    if not mq.TLO.Window('TributeMasterWnd').Open() then return end
+    local beginningFavor = tonumber(mq.TLO.Window('TMW_LabelWnd/TMW_CurrentPointsLabel').Text()) or 0
+    local donatedItems = 0
+    mq.cmd('/keypress OPEN_INV_BAGS')
+    mq.delay(1000)
+    for k, v in pairs(selectedItems) do
+        if v.item.Tribute() > 0 and v.location:find('pack') then
+            printf('Going to %s item %s (%s)', action, v.item.Name(), v.location)
+            for i = 1, 10 do
+                mq.cmdf('/nomodkey /itemnotify "%s" leftmouseup', v.item.Name())
+                mq.delay(250,
+                    function() return tonumber(mq.TLO.Window('TMW_DonateWnd/TMW_ValueLabel').Text()) == v.item.Tribute() end)
+                if tonumber(mq.TLO.Window('TMW_DonateWnd/TMW_ValueLabel').Text()) == v.item.Tribute() then break end
+            end
+            if mq.TLO.Window('TMW_DonateWnd/TMW_DonateButton').Enabled() then
+                mq.cmdf('/nomodkey /notify tmw_donatewnd TMW_DonateButton leftmouseup')
+                mq.delay(1000, function() return not mq.TLO.Window('TMW_DonateWnd/TMW_DonateButton').Enabled() end)
+                donatedItems = donatedItems + 1
+                mq.delay(1500) -- arbitrary delay for before selecting next item
+            end
+        end
+    end
+    mq.delay(500)
+    local endingFavor = tonumber(mq.TLO.Window('TMW_LabelWnd/TMW_CurrentPointsLabel').Text()) or 0
+    local gainedFavor = endingFavor - beginningFavor
+    mq.cmd('/keypress CLOSE_INV_BAGS')
+    printf('\awDonated \ay%s\ax items for \ag%s\ax favor.', donatedItems, gainedFavor)
+end
+
+--- AMS adding actors
+
+
+local function addtoon(sender)
+    --printf('Received toon %s', sender)
+
+    for _, element in ipairs(toons) do
+        if element == sender then
+            return false
+        end
+    end
+    table.insert(toons, sender)
+    --printf('# toons: %s', #toons)
+    return true
+end
+
+
+local function removetoon(sender)
+    for index, element in ipairs(toons) do
+        if element == sender then
+            table.remove(toons, index)
+        end
+    end
+end
+
+
+local function sendinventory(sender)
+    actor:send({ character = sender }, { id = 'invrec', cargo = senditems })
+end
+
+local function announce()
+    actor:send({ id = 'announce' })
+end
+
+actor = actors.register(function(message)
+    if message.content.id == 'invreq' and message.sender then
+        -- request for inventory update
+        --printf('replying...to: ', message.sender.character)
+        message:reply(0, {})
+        createInventory()
+        sendinventory(message.sender.character)
+        --print('reply done')
+    elseif message.content.id == 'invrec' then
+        if message.sender.character ~= mq.TLO.Me.CleanName() then
+            --printf('Me: ||%s|| Toon: ||%s||', mq.TLO.Me.CleanName(), message.sender.character)
+            local tempinv = message.content.cargo
+            if #tempinv > 0 then
+                table.move(tempinv, 1, #tempinv, #remoteitems + 1, remoteitems)
+            end
+        end
+    elseif message.content.id == 'announce' then
+        -- a buffer has announced themselves, add them to the list
+        --printf('announce: %s ', message.sender.character)
+        addtoon(message.sender.character)
+    elseif message.content.id == 'check' then
+        -- check called
+        --printf('check sent: %s ', message.sender.character)
+        announce()
+    elseif message.content.id == 'drop' then
+        -- a buffer has dropped, remove them from the list
+        --printf('drop: %s', message.sender.character)
+        removetoon(message.sender.character)
+    end
+end)
+
+local function actorupdate()
+    print('Actorupdate triggered')
+    items = {}
+    remoteitems = {}
+    createInventory()
+    if #toons > 0 then
+        for i = 1, #toons do
+            actor:send({ character = toons[i] }, { id = 'invreq' }, function(status, message)
+                if status < 0 then
+                    printf('#: %s removing toon: %s status: %s', i, toons[i], status)
+                    removetoon(toons[i])
+                end
+            end)
+        end
+    end
+end
+
+local function checkactors()
+    actor:send({ id = 'check' })
+end
+
+local function clearactors()
+    remoteitems = {}
+    forceRefresh = true
+    createInventory()
+end
+
+local actions = {
+    bank = bank,
+    withdraw = withdraw,
+    sell = sell,
+    tribute = tribute,
+    actorupdate = actorupdate,
+    checkactors =
+        checkactors,
+    clearactors = clearactors
+}
+
 local function split(input, sep)
     if sep == nil then
         sep = "|"
     end
-    local t={}
-    for str in string.gmatch(input, "([^"..sep.."]+)") do
+    local t = {}
+    for str in string.gmatch(input, "([^" .. sep .. "]+)") do
         table.insert(t, str)
     end
     return t
@@ -684,15 +1048,45 @@ local function query(peer, query, timeout)
     return value
 end
 
-local searchBags = 'FindItem[=%s]'
-local searchBank = 'FindItemBank[=%s]'
-local countBags = 'FindItemCount[=%s]'
-local countBank = 'FindItemBankCount[=%s]'
+local searchBags = 'FindItem[%s%s]'
+local searchBank = 'FindItemBank[%s%s]'
+local countBags = 'FindItemCount[%s%s]'
+local countBank = 'FindItemBankCount[%s%s]'
+local function executeDanNetQueries()
+    searchResults = {}
+    local toons = split(mq.TLO.DanNet.Peers())
+    for _, toon in ipairs(toons) do
+        if toon ~= mq.TLO.Me.CleanName():lower() then
+            local searchedBank = false
+            local result = query(toon, searchBags:format(searchExactMatch and '=' or '', searchText), 500)
+            if result == 'NULL' and shouldSearchBank then
+                result = query(toon, searchBank:format(searchExactMatch and '=' or '', searchText), 500)
+                searchedBank = true
+            end
+            if result ~= 'NULL' and result ~= nil then
+                local search = countBags
+                if searchedBank then
+                    search = countBank
+                end
+                local count = query(toon, search:format(searchExactMatch and '=' or '', searchText), 500)
+                table.insert(searchResults,
+                    { toon = toon, item = result, count = count, inbags = (searchedBank == false) })
+            end
+        end
+    end
+    searchChanged = false
+    searchUpdateResults = true
+end
+
+local function shouldQueryDanNet()
+    return usingDanNet and searchChanged and searchText ~= ''
+end
 
 local function sendRequest()
-    local spawn = mq.TLO.Spawn('pc ='..itemRequest.toon)
+    local spawn = mq.TLO.Spawn('pc =' .. itemRequest.toon)
     if spawn() and spawn.Distance3D() < 15 then
-        mq.cmdf('/dex %s /nomodkey /shiftkey /itemnotify "$\\{FindItem[%s]}" leftmouseup', itemRequest.toon, itemRequest.name)
+        mq.cmdf('/dex %s /nomodkey /shiftkey /itemnotify "$\\{FindItem[%s]}" leftmouseup', itemRequest.toon,
+            itemRequest.name)
         mq.delay(100)
         mq.cmdf('/dex %s /mqtar %s', itemRequest.toon, mq.TLO.Me.CleanName())
         mq.delay(100)
@@ -718,34 +1112,30 @@ mq.imgui.init("FindGUI", applyStyle)
 
 mq.bind('/findwindow', function() openGUI = true end)
 
+
+
+
+
+
+
+local runscript = true
+mq.bind('/stopfind', function() runscript = false end)
+
 --- Main Script Loop
-while true do
+
+while runscript == true do
     mq.delay(250)
-    if usingDanNet and searchChanged and searchText ~= '' then
-        searchResults = {}
-        local toons = split(mq.TLO.DanNet.Peers())
-        for _,toon in ipairs(toons) do
-            if toon ~= mq.TLO.Me.CleanName():lower() then
-                local searchedBank = false
-                local result = query(toon, searchBags:format(searchText), 500)
-                if result == 'NULL' and shouldSearchBank then
-                    result = query(toon, searchBank:format(searchText), 500)
-                    searchedBank = true
-                end
-                if result ~= 'NULL' then
-                    local search = countBags
-                    if searchedBank then
-                        search = countBank
-                    end
-                    local count = query(toon, search:format(searchText), 500)
-                    table.insert(searchResults, {toon=toon, item=result, count=count, inbags=(searchedBank==false)})
-                end
-            end
-        end
-        searchChanged = false
-        searchUpdateResults = true
+    if action then
+        actions[action]()
+        action = nil
+        selectedItems = {}
+    end
+    if shouldQueryDanNet() then
+        executeDanNetQueries()
     end
     if itemRequest then
         sendRequest()
     end
 end
+
+actor:send({ id = 'drop' })
