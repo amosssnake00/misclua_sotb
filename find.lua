@@ -9,6 +9,13 @@ require("ImGui")
 -- local debug = debugger.new("amsactors")
 -- debug:Enable()
 
+-- AMS How-Tp:
+-- First, run "/lua run find" on any char you want to have included in the inventory
+-- then, click on one char "Refresh Actor List"
+-- then after two seconds or so, click "Actor Update All Inv"
+-- you can now search, filter, ... for all items in all inventory + bank tables
+-- if you want a specific item, you can click "Search" and in the search popup request the item 
+
 
 local openGUI = true
 local shouldDrawGUI = true
